@@ -1,3 +1,19 @@
+# Ignore the docs folder
+/documents/*
+!documents/.gitkeep
+# Ignore the temp folder
+/temp/*
+
+# Ignore the build folder
+/Fallbeispiele/*
+
+
+# Ignore a specific file
+# example.txt
+
+# Ignore all .log files
+*.log
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
