@@ -187,8 +187,7 @@ if __name__ == "__main__":
     )
 
     template = """INSTRUKTIONEN: Du musst nur auf Deutsch antworten.
-    Du bist ein hilfreicher KI-Agent. Ich bin ein Sozialarbeiter im Einarbeitungsprozess und arbeite bei der Pro Senectute Aargau. 
-    Bei der Pro Senectute haben wir das Angebot der Individuellen Finanzhilfe. 
+    Du bist ein hilfreicher KI-Agent. Ich bin ein Sozialarbeiter im Einarbeitungsprozess und arbeite bei der Sozialhilfe in der Schweiz. 
     Bitte Suche in den dir zu zurverfügunggestellen Dokumenten und gibt mir möglichst genaue und hilfreiche Antworten auf meine Frage. 
     Wenn es keine Hinweise in den Dokumenten gibt, sage mir, dass ich die Frage nicht beantworten kann.
     Gib mir immer eine Quellenangabe deiner Antwort (zum Beispiel "Dokument 1, , Seite 3")
@@ -201,7 +200,7 @@ if __name__ == "__main__":
     chain = create_retrieval_chain(retriever, doc_chain)
 
     with gr.Blocks(css=".gradio-container { font-size: 6px; }") as app:
-        gr.Markdown("# Pro Senectute Suchassistent zur individuellen Finanzhilfe für Sozialarbeitende")
+        gr.Markdown("# Suchassistent für Sozialarbeitende")
         query_input = gr.Textbox(label="Formuliere deine Frage", placeholder="Was möchtest du wissen?", lines=2)
 
         response_output = gr.Textbox(label="Antwort", interactive=False)
@@ -267,11 +266,9 @@ if __name__ == "__main__":
 
         # Example queries
         gr.Markdown("### Beispielanfragen:")
-        gr.Markdown("Beispiel: \"Welche Unterlagen benötige ich für ein Gesuch, wenn ich Nebenkosten beantrage?\"")
-        gr.Markdown("Beispiel: \"Was muss ich beachten, wenn ich ein Hörgerät beantrage?\"")
-        gr.Markdown("Beispiel: \"Ist ein Ehepaar mit einer AHV Rente von 4000.- plus Pensionskasse Rente von 2000.- berechtigt individuelle Finanzhilfe zu beantragen, grundsätzlich?\"")
-        gr.Markdown("Beispiel: \"Ein Klient hat eine Rechnung von 3000.- für Nebenkosten Wohnnebenkosten, diese Rechnung wurde vor 6 Monaten bezahlt, kann ich diese Gelder über IF beantragen?\"")
-        gr.Markdown("Beispiel: \"Schreibe mir ein Gesuch, für eine Brille, das Gesuch beinhaltet, Ausgangslage, Ziel, Subsidiarität, Partizipation?\"")
+        gr.Markdown("Beispiel: \"Welche Unterlagen benötige ich für ein Gesuch, finanzielle Sozialhilfe beantrage?\"")
+        gr.Markdown("Beispiel: \"Ist ein Ehepaar mit einer AHV Rente von 4000.- plus Pensionskasse Rente von 2000.- berechtigt Sozialhilfe zu beantragen, grundsätzlich?\"")
+        
 
         # Corrected CSS to ensure font size is applied properly
         app.css += """

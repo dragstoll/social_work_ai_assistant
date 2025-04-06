@@ -14,6 +14,10 @@
 # Ignore all .log files
 *.log
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> 33db73555b47bb9d6c382927b9e4b79766038c4d
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

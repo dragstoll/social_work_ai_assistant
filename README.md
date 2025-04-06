@@ -1,7 +1,7 @@
-# Pro Senectute SW Assistant
+# Social Work AI Assistant
 
 ## Overview
-The **Pro Senectute SW Assistant** is an AI-powered assistant designed to help social workers (SW) at Pro Senectute navigate the complex regulations of Individual Financial Assistance (Individuelle Finanzhilfe). The assistant uses Retrieval-Augmented Generation (RAG) to provide accurate and reliable answers to user queries based on the provided documents. It also references the source of the information (e.g., document name, page, and section).
+The **Social Work AI Assistant** is an AI-powered assistant designed to help social workers (SW) at SW organisation navigate the complex regulations of Individual Financial Assistance (Individuelle Finanzhilfe). The assistant uses Retrieval-Augmented Generation (RAG) to provide accurate and reliable answers to user queries based on the provided documents. It also references the source of the information (e.g., document name, page, and section).
 
 ## Features
 - **Document Loading**: Automatically loads all PDF documents from a specified folder for processing.
@@ -64,11 +64,8 @@ All user interactions and system responses are logged in `gradio_assisstant_maco
 
 ## Example Queries
 Here are some example questions you can ask the assistant:
-1. **"Welche Unterlagen benötige ich für ein Gesuch, wenn ich Nebenkosten beantrage?"**
-2. **"Was muss ich beachten, wenn ich ein Hörgerät beantrage?"**
-3. **"Ist ein Ehepaar mit einer AHV Rente von 4000.- plus Pensionskasse Rente von 2000.- berechtigt individuelle Finanzhilfe zu beantragen, grundsätzlich?"**
-4. **"Ein Klient hat eine Rechnung von 3000.- für Nebenkosten Wohnnebenkosten, diese Rechnung wurde vor 6 Monaten bezahlt, kann ich diese Gelder über IF beantragen?"**
-5. **"Schreibe mir ein Gesuch, für eine Brille, das Gesuch beinhaltet, Ausgangslage, Ziel, Subsidiarität, Partizipation?"**
+1. **"Welche Unterlagen benötige ich für ein Gesuch, finanzielle Sozialhilfe beantrage?"**
+2. **"Ist ein Ehepaar mit einer AHV Rente von 4000.- plus Pensionskasse Rente von 2000.- berechtigt Sozialhilfe zu beantragen, grundsätzlich?"**
 
 ## Development Notes
 ### To-Do List
@@ -104,8 +101,5 @@ Here are some example questions you can ask the assistant:
 ## License
 This project is licensed under the MIT License. See the `LICENSE` file for details.
 
-## Acknowledgments
-- **Mateo Soppelsa**: For providing guidance and resources.
-- **Pro Senectute**: For the opportunity to develop this assistant.
-- **Hugging Face**: For existing RAG PDF Q&A solutions that inspired this project.
+
 
