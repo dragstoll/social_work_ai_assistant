@@ -13,6 +13,31 @@ import sys
 import json
 import csv  # Add CSV module for saving evaluations
 
+
+# Define the available models and allow the user to choose one
+available_models = {
+    "QwQ-32B-4bit": "mlx-community/QwQ-32B-4bit",
+    "Gemma-3-27B-4bit": "mlx-community/gemma-3-27b-it-4bit",
+    "Qwen2.5-32B-Instruct-4bit": "mlx-community/Qwen2.5-32B-Instruct-4bit",
+    "Mistral-Large-2407-4bit": "mlx-community/Mistral-Large-Instruct-2407-4bit",
+    "Mistral-Small-2501-4bit": "mlx-community/Mistral-Small-24B-Instruct-2501-4bit",
+    "Llama-4-Maverick-17B-4bit": "mlx-community/Llama-4-Maverick-17B-16E-Instruct-4bit",
+    "Llama-4-Scout-17B-4bit": "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit",
+    "Mistral-Nemo-Instruct-2407-4bit": "mlx-community/Mistral-Nemo-Instruct-2407-4bit",
+}
+
+# Function to select a model
+def select_model(model_name):
+    if model_name in available_models:
+        logging.info(f"Model selected: {model_name}")
+        return available_models[model_name]
+    else:
+        logging.error(f"Invalid model name: {model_name}. Defaulting to Mistral-Small-2501-4bit.")
+        return available_models["Mistral-Small-2501-4bit"]
+
+# Example: Set the model to use
+selected_model = select_model("Mistral-Nemo-Instruct-2407-4bit")
+
 # Configure logging
 logging.basicConfig(
     filename="gradio_assisstant_macos.log",
@@ -54,6 +79,12 @@ def save_chunks_to_file(retrieved_chunks, file_path="retrieved_chunks.json"):
                 ensure_ascii=False,
                 indent=4,
             )
+            with open("retrieved_chunks.csv", "w", newline="", encoding="utf-8") as csvfile:
+                csv_writer = csv.writer(csvfile)
+                csv_writer.writerow(["Content"])  # Write header
+                for chunk in retrieved_chunks:
+                    csv_writer.writerow([chunk.page_content])
+                    
         logging.info(f"Retrieved chunks successfully saved to {file_path}")
     except Exception as e:
         logging.error(f"Failed to save retrieved chunks to file: {e}")
@@ -68,32 +99,92 @@ def ask_question_with_chunks(query):
     logging.info(f"User query: {query}")
     response = chain.invoke({"input": query})
     answer = response["answer"]
-    retrieved_chunks = response.get("retrieved_documents", [])  # Assuming retrieved chunks are returned here
-    save_chunks_to_file(retrieved_chunks)  # Save only the retrieved chunks
+    # retrieved_chunks = response.get("retrieved_documents", [])  # Assuming retrieved chunks are returned here
+    # save_chunks_to_file(retrieved_chunks)  # Save only the retrieved chunks
     logging.info(f"Response: {answer}")
     logging.getLogger().handlers[0].flush()  # Explicitly flush logs to the file
+    # Save the chunks to a file
+    # query = """{input}"""  # Provide a default query for testing
+    retrieved_documents = retriever.get_relevant_documents(query)
+    save_chunks_to_file(retrieved_documents, "retrieved_chunks.json")
+
     return answer
 
-# Function to update RAG parameters and visually indicate the active button
+# Load the MLXPipeline model immediately
+llm = MLXPipeline.from_model_id(
+    selected_model,
+    pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
+)
+
+# Function to update RAG parameters, reload documents, and rerun all necessary functions
 def update_rag_parameters(option):
-    global retriever, llm, chain
-    if option == "Antworte möglichst genau":
-        retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 8})
-        llm = MLXPipeline.from_model_id(
-            "mlx-community/Mistral-Small-24B-Instruct-2501-4bit",
-            pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
+    global retriever, llm, chain, documents, vectorstore, prompt
+    logging.info(f"Updating RAG parameters based on user selection: {option}")
+    try:
+        # Reload documents
+        folder_path = "./documents"
+        logging.info("Reloading documents...")
+        documents = load_all_documents(folder_path)
+        if not documents:
+            logging.error("No documents were loaded. Please check the folder path and document files.")
+            return
+        logging.info(f"{len(documents)} documents reloaded successfully.")
+
+        # Split documents into chunks
+        logging.info("Splitting documents into chunks...")
+        documents = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=100,
+        ).split_documents(documents)
+        if not documents:
+            logging.error("No chunks were created. Please check the document processing logic.")
+            return
+        logging.info(f"{len(documents)} chunks created successfully.")
+
+        # Append document name and page number to each chunk
+        for doc in documents:
+            source = doc.metadata.get("source", "Unbekanntes Dokument")
+            page = doc.metadata.get("page", "Unbekannte Seite")
+            doc.page_content += f" ({source}, Seite {page})"
+
+        # Save the chunks to a file
+        # save_chunks_to_file(documents)
+
+        # Recreate vectorstore
+        logging.info("Recreating vectorstore...")
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            encode_kwargs={"normalize_embeddings": True},
         )
-        logging.info("RAG parameters updated: k=3, temp=0.1")
-        return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
-    elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
-        retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 20})
-        llm = MLXPipeline.from_model_id(
-            "mlx-community/Mistral-Small-24B-Instruct-2501-4bit",
-            pipeline_kwargs={"max_tokens": 2024, "temp": 0.6},
-        )
-        logging.info("RAG parameters updated: k=20, temp=0.6")
-        return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
-    chain = create_retrieval_chain(retriever, doc_chain)
+        vectorstore = Chroma.from_documents(documents, embeddings)
+
+        # Update retriever and LLM based on the selected option
+        if option == "Antworte möglichst genau":
+            retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
+            logging.info("RAG parameters updated: k=8, temp=0.1. Reloading model...")
+            llm = MLXPipeline.from_model_id(
+                selected_model,
+                pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
+            )
+            logging.info("Model reloaded successfully for precise answers.")
+            return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
+        elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
+            retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 20})
+            logging.info("RAG parameters updated: k=20, temp=0.6. Reloading model...")
+            llm = MLXPipeline.from_model_id(
+                selected_model,
+                pipeline_kwargs={"max_tokens": 2024, "temp": 0.6},
+            )
+            logging.info("Model reloaded successfully for creative answers.")
+            return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
+
+        # Recreate the chain
+        doc_chain = create_stuff_documents_chain(llm, prompt)
+        
+        chain = create_retrieval_chain(retriever, doc_chain)
+        print("bla")
+    except Exception as e:
+        logging.error(f"Error while updating RAG parameters, reloading documents, or rerunning functions: {e}")
 
 # Function to log and save evaluation, ensuring it can only be done once
 evaluation_done = False  # Global flag to track if evaluation has been done
@@ -151,8 +242,7 @@ if __name__ == "__main__":
                     page = doc.metadata.get("page", "Unbekannte Seite")
                     doc.page_content += f" ({source}, Seite {page})"
 
-                # Save the chunks to a file
-                save_chunks_to_file(documents)
+                
 
         except Exception as e:
             logging.error(f"Error during document splitting: {e}")
@@ -166,25 +256,16 @@ if __name__ == "__main__":
 
     vectorstore = Chroma.from_documents(documents, embeddings)
     # Set the default retriever parameters
-    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 8})
+    retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
 
     # Update retriever parameters based on user choice
-    def update_retriever_parameters(choice):
+    def update_retriever_parameters(choice, input):
         if choice == "Antworte möglichst genau":
             retriever.search_kwargs["k"] = 8
             logging.info("Retriever parameter updated: k=8 for precise answers")
         elif choice == "Antworte mit möglichst vielen Hinweisen und Ideen":
             retriever.search_kwargs["k"] = 20
             logging.info("Retriever parameter updated: k=20 for more creative answers")
-
-    llm = MLXPipeline.from_model_id(
-        # "mlx-community/QwQ-32B-4bit",
-        #   "mlx-community/gemma-3-27b-it-4bit",
-    #    "mlx-community/Qwen2.5-32B-Instruct-4bit",
-    # "mlx-community/Mistral-Large-Instruct-2407-4bit",
-    "mlx-community/Mistral-Small-24B-Instruct-2501-4bit",
-        pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
-    )
 
     template = """INSTRUKTIONEN: Du musst nur auf Deutsch antworten.
     Du bist ein hilfreicher KI-Agent. Ich bin ein Sozialarbeiter im Einarbeitungsprozess und arbeite bei der Sozialhilfe in der Schweiz. 
@@ -198,7 +279,8 @@ if __name__ == "__main__":
     prompt = ChatPromptTemplate.from_template(template)
     doc_chain = create_stuff_documents_chain(llm, prompt)
     chain = create_retrieval_chain(retriever, doc_chain)
-
+    
+    
     with gr.Blocks(css=".gradio-container { font-size: 6px; }") as app:
         gr.Markdown("# Suchassistent für Sozialarbeitende")
         query_input = gr.Textbox(label="Formuliere deine Frage", placeholder="Was möchtest du wissen?", lines=2)
@@ -268,6 +350,8 @@ if __name__ == "__main__":
         gr.Markdown("### Beispielanfragen:")
         gr.Markdown("Beispiel: \"Welche Unterlagen benötige ich für ein Gesuch, finanzielle Sozialhilfe beantrage?\"")
         gr.Markdown("Beispiel: \"Ist ein Ehepaar mit einer AHV Rente von 4000.- plus Pensionskasse Rente von 2000.- berechtigt Sozialhilfe zu beantragen, grundsätzlich?\"")
+        gr.Markdown("Beispiel: \"Was muss ich beachten, wenn ich Sozialhilfe beantrage?\"")
+        gr.Markdown("Beispiel: \"Wie lange dauert es, bis ich eine Antwort auf mein Gesuch erhalte?\"")
         
 
         # Corrected CSS to ensure font size is applied properly
