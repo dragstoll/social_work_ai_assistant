@@ -36,7 +36,9 @@ def select_model(model_name):
         return available_models["Mistral-Small-2501-4bit"]
 
 # Example: Set the model to use
-selected_model = select_model("Mistral-Nemo-Instruct-2407-4bit")
+selected_model = select_model("Gemma-3-27B-4bit")  # Default model
+# log the model that has been selected
+logging.info(f"Selected model: {selected_model}")
 
 # Configure logging
 logging.basicConfig(
@@ -115,6 +117,7 @@ llm = MLXPipeline.from_model_id(
     selected_model,
     pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
 )
+logging.info(f"LLM loaded for RAG: {selected_model}")
 
 # Function to update RAG parameters, reload documents, and rerun all necessary functions
 def update_rag_parameters(option):
@@ -166,7 +169,7 @@ def update_rag_parameters(option):
                 selected_model,
                 pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
             )
-            logging.info("Model reloaded successfully for precise answers.")
+            logging.info(f"LLM reloaded for precise answers: {selected_model}")
             return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
         elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
             retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 20})
@@ -175,7 +178,7 @@ def update_rag_parameters(option):
                 selected_model,
                 pipeline_kwargs={"max_tokens": 2024, "temp": 0.6},
             )
-            logging.info("Model reloaded successfully for creative answers.")
+            logging.info(f"LLM reloaded for creative answers: {selected_model}")
             return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
 
         # Recreate the chain
