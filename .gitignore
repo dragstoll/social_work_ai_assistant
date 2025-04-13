@@ -1,6 +1,9 @@
 # Ignore the docs folder
 /documents/*
 !documents/.gitkeep
+
+/uploaded_documents/*
+!uploaded_documents/.gitkeep
 # Ignore the temp folder
 /temp/*
 
