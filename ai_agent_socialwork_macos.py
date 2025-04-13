@@ -219,6 +219,117 @@ def log_evaluation(evaluation):
         logging.error(f"Failed to save evaluation: {e}")
         return gr.update(interactive=False), gr.update(interactive=False)
 
+# Directory to store uploaded files
+uploaded_files_dir = "./uploaded_documents"
+Path(uploaded_files_dir).mkdir(parents=True, exist_ok=True)
+
+# Function to list already loaded files
+def list_loaded_files():
+    try:
+        files = [file.name for file in Path(uploaded_files_dir).glob("*.pdf")]
+        if not files:
+            logging.info("No files have been uploaded yet.")
+            return "No files uploaded yet."
+        logging.info(f"Loaded files: {files}")
+        return "\n".join(files)
+    except Exception as e:
+        logging.error(f"Error listing loaded files: {e}")
+        return "Error listing files."
+
+# Function to handle file uploads
+def upload_files(files):
+    try:
+        if not files:
+            logging.warning("No files were provided for upload.")
+            return "No files selected."
+
+        uploaded_file_names = []
+        for temp_file in files:
+            # Gradio provides a temporary file object with a 'name' attribute holding the path
+            temp_file_path = temp_file.name
+            # Use the original filename if available, otherwise generate one
+            original_filename = Path(temp_file_path).name # Gradio often uses generic temp names, consider extracting original if needed elsewhere
+            
+            # Define the destination path using the original filename or a default
+            # For simplicity, we'll use the temp name's base name, but ideally, Gradio might provide the original name
+            # Let's assume the temp file name is sufficient for now or use a fixed name if needed.
+            # Using the name attribute directly might give a path, let's extract the base name.
+            destination_filename = Path(temp_file_path).name # Or use a more robust way to get original name if available
+            destination = Path(uploaded_files_dir) / destination_filename
+
+            # Read from the temporary file path and write to the destination
+            with open(temp_file_path, "rb") as infile, open(destination, "wb") as outfile:
+                outfile.write(infile.read())
+            
+            logging.info(f"File saved to: {destination}")
+            uploaded_file_names.append(destination_filename)
+
+        return f"Files uploaded successfully: {', '.join(uploaded_file_names)}"
+    except AttributeError as e:
+        logging.error(f"Error accessing file properties: {e}. Check Gradio version compatibility or file object structure.")
+        return "Error processing uploaded files (AttributeError)."
+    except Exception as e:
+        logging.error(f"Error uploading files: {e}")
+        # Provide more specific error feedback if possible
+        return f"Error uploading files: {e}"
+
+# Function to load all uploaded files for RAG processing
+def load_uploaded_files_for_rag():
+    global vectorstore, retriever, chain # Ensure global variables are modified
+    try:
+        logging.info("Loading uploaded files for RAG processing...")
+        # Use the dedicated directory for uploaded files
+        documents = load_all_documents(uploaded_files_dir)
+        if not documents:
+            logging.warning("No documents were loaded from the uploaded files directory.")
+            # Keep existing vectorstore if no new files are loaded? Or clear it?
+            # For now, return a message indicating no new files processed.
+            return "No new documents found in the upload directory to process."
+
+        logging.info(f"Loaded {len(documents)} documents from {uploaded_files_dir}.")
+
+        # Split documents into chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=100,
+        )
+        split_docs = text_splitter.split_documents(documents)
+        if not split_docs:
+            logging.error("No chunks were created from uploaded files.")
+            return "Failed to split uploaded documents into chunks."
+        logging.info(f"Split uploaded documents into {len(split_docs)} chunks.")
+
+        # Append document name and page number to each chunk
+        for doc in split_docs:
+            source = doc.metadata.get("source", "Unknown Document")
+            page = doc.metadata.get("page", "Unknown Page")
+            doc.page_content += f" ({source}, Page {page})"
+
+        # Recreate vectorstore with the new documents
+        # Consider adding to existing store vs. replacing
+        # Current implementation replaces the vectorstore
+        logging.info("Recreating vectorstore with uploaded documents...")
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            encode_kwargs={"normalize_embeddings": True},
+        )
+        vectorstore = Chroma.from_documents(split_docs, embeddings)
+
+        # Recreate the retriever and chain with the new vectorstore
+        # Use the currently selected RAG parameters (k value)
+        current_k = retriever.search_kwargs.get("k", 8) # Get current k or default to 8
+        retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": current_k})
+        
+        # Recreate the chain with the updated retriever
+        doc_chain = create_stuff_documents_chain(llm, prompt)
+        chain = create_retrieval_chain(retriever, doc_chain)
+
+        logging.info("Vectorstore and RAG chain updated with uploaded files.")
+        return f"Uploaded files ({len(documents)} documents, {len(split_docs)} chunks) successfully processed for RAG."
+    except Exception as e:
+        logging.error(f"Error loading uploaded files for RAG processing: {e}")
+        return f"Error loading uploaded files for RAG processing: {e}"
+
 # Gradio app
 if __name__ == "__main__":
     folder_path = "./documents"
@@ -289,6 +400,39 @@ if __name__ == "__main__":
         query_input = gr.Textbox(label="Formuliere deine Frage", placeholder="Was möchtest du wissen?", lines=2)
 
         response_output = gr.Textbox(label="Antwort", interactive=False)
+
+        # File upload and listing section
+        gr.Markdown("### Dateien hochladen und anzeigen:")
+        with gr.Row():
+            file_upload = gr.File(label="Lade PDF-Dateien hoch", file_types=[".pdf"], file_count="multiple")
+            upload_button = gr.Button("Hochladen")
+            list_files_button = gr.Button("Geladene Dateien anzeigen")
+        uploaded_files_output = gr.Textbox(label="Geladene Dateien", interactive=False)
+
+        # Button to load uploaded files for RAG processing
+        load_files_button = gr.Button("Geladene Dateien für RAG verarbeiten")
+        load_files_output = gr.Textbox(label="Status", interactive=False)
+
+        # Trigger file upload
+        upload_button.click(
+            upload_files,
+            inputs=[file_upload],
+            outputs=[uploaded_files_output],
+        )
+
+        # List already loaded files
+        list_files_button.click(
+            list_loaded_files,
+            inputs=[],
+            outputs=[uploaded_files_output],
+        )
+
+        # Load uploaded files for RAG processing
+        load_files_button.click(
+            load_uploaded_files_for_rag,
+            inputs=[],
+            outputs=[load_files_output],
+        )
 
         # Add buttons for RAG parameter selection
         gr.Markdown("### Wähle eine Antwortstrategie:")
