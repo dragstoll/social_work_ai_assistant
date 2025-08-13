@@ -12,7 +12,8 @@ import logging
 import sys
 import json
 import csv  # Add CSV module for saving evaluations
-
+import gc
+import mlx.core as mx
 
 # Define the available models and allow the user to choose one
 available_models = {
@@ -134,103 +135,44 @@ logging.info(f"LLM loaded for RAG (initial, möglichst genau): {selected_model}"
 
 # Function to update RAG parameters, reload documents, and rerun all necessary functions
 def update_rag_parameters(option):
-    import gc
-    global retriever, llm, chain, documents, vectorstore, prompt
-    logging.info(f"Updating RAG parameters based on user selection: {option}")
-    try:
-        # Free previous LLM and GPU memory
-        if 'llm' in globals() and llm is not None:
-            del llm
-            gc.collect()
-            logging.info("Previous LLM deleted and memory freed.")
-
-        # Reload documents
-        folder_path = "./documents"
-        logging.info("Reloading documents...")
-        documents = load_all_documents(folder_path)
-        if not documents:
-            logging.error("No documents were loaded. Please check the folder path and document files.")
-            return
-        logging.info(f"{len(documents)} documents reloaded successfully.")
-
-        # Split documents into chunks
-        logging.info("Splitting documents into chunks...")
-        documents = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=100,
-        ).split_documents(documents)
-        if not documents:
-            logging.error("No chunks were created. Please check the document processing logic.")
-            return
-        logging.info(f"{len(documents)} chunks created successfully.")
-
-        # Append document name and page number to each chunk
-        for doc in documents:
-            source = doc.metadata.get("source", "Unbekanntes Dokument")
-            page = doc.metadata.get("page", "Unbekannte Seite")
-            doc.page_content += f" ({source}, Seite {page})"
-
-        # Recreate vectorstore
-        logging.info("Recreating vectorstore...")
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            encode_kwargs={"normalize_embeddings": True},
+    global llm
+    # Update retriever and LLM based on the selected option
+    if option == "Antworte möglichst genau":
+        # unload the previous LLM
+        del llm
+        gc.collect()
+        mx.metal.clear_cache()
+        logging.info("Previous LLM deleted and memory freed.")
+        #reload the LLM with new params
+        llm = MLXPipeline.from_model_id(
+            selected_model,
+            pipeline_kwargs={"max_tokens": 512, "temp": 0.1},
         )
-        vectorstore = Chroma.from_documents(documents, embeddings)
+        gc.collect()
+        mx.metal.clear_cache()
+        logging.info(f"LLM reloaded for precise answers: {selected_model}")
+        # Recreate the chain
+        
+        return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
+    elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
+        # unload the previous LLM
+        del llm
+        gc.collect()
+        logging.info("Previous LLM deleted and memory freed.")
 
-        # Update retriever and LLM based on the selected option
-        if option == "Antworte möglichst genau":
-            retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
-            logging.info("RAG parameters updated: k=8, temp=0.1. Reloading model...")
-            # unload the previous LLM
-            if 'llm' in globals() and llm is not None:
-                try:
-                    del llm
-                    gc.collect()
-                    logging.info("Previous LLM deleted and memory freed.")
-                except Exception as e:
-                    logging.warning(f"Could not delete previous LLM: {e}")
-                    llm = None
-            #reload the LLM with new params
-            llm = MLXPipeline.from_model_id(
-                selected_model,
-                pipeline_kwargs={"max_tokens": 512, "temp": 0.1},
-            )
-            logging.info(f"LLM reloaded for precise answers: {selected_model}")
-            # Recreate the chain
-            doc_chain = create_stuff_documents_chain(llm, prompt)
-            chain = create_retrieval_chain(retriever, doc_chain)
-            return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
-        elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
-            retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 20})
-            logging.info("RAG parameters updated: k=20, temp=0.6. Reloading model...")
-            # unload the previous LLM
-            if 'llm' in globals() and llm is not None:
-                try:
-                    del llm
-                    gc.collect()
-                    logging.info("Previous LLM deleted and memory freed.")
-                except Exception as e:
-                    logging.warning(f"Could not delete previous LLM: {e}")
-                    llm = None
-            #reload the LLM with new params
-            llm = MLXPipeline.from_model_id(
-                selected_model,
-                pipeline_kwargs={"max_tokens": 512, "temp": 0.6},
-            )
-            logging.info(f"LLM reloaded for creative answers: {selected_model}")
-            # Recreate the chain
-            doc_chain = create_stuff_documents_chain(llm, prompt)
-            chain = create_retrieval_chain(retriever, doc_chain)
-            return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
+        #reload the LLM with new params and overwrite llm
+        llm = MLXPipeline.from_model_id(
+            selected_model,
+            pipeline_kwargs={"max_tokens": 512, "temp": 0.7},
+        )
+        logging.info(f"LLM reloaded for creative answers: {selected_model}")
+        # Recreate the chain
+        
+        gc.collect()
+        mx.metal.clear_cache()
+        return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
 
-        # Recreate the chain for other cases
-        doc_chain = create_stuff_documents_chain(llm, prompt)
-        chain = create_retrieval_chain(retriever, doc_chain)
-        print("bla")
-    except Exception as e:
-        logging.error(f"Error while updating RAG parameters, reloading documents, or rerunning functions: {e}")
-
+        
 # Function to log and save evaluation, ensuring it can only be done once
 evaluation_done = False  # Global flag to track if evaluation has been done
 
@@ -359,8 +301,8 @@ def load_uploaded_files_for_rag():
 
         # Recreate the retriever and chain with the new vectorstore
         # Use the currently selected RAG parameters (k value)
-        current_k = retriever.search_kwargs.get("k", 8) # Get current k or default to 8
-        retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": current_k})
+        current_k = retriever.search_kwargs.get("k", 20) # Get current k or default to 8
+        retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": current_k})
 
         # Recreate the chain with the updated retriever
         doc_chain = create_stuff_documents_chain(llm, prompt)
@@ -412,16 +354,26 @@ if __name__ == "__main__":
 
     vectorstore = Chroma.from_documents(documents, embeddings)
     # Set the default retriever parameters
-    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 8})
+    retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 20})
 
     # Update retriever parameters based on user choice
-    def update_retriever_parameters(choice, input):
-        if choice == "Antworte möglichst genau":
-            retriever.search_kwargs["k"] = 8
-            logging.info("Retriever parameter updated: k=8 for precise answers")
-        elif choice == "Antworte mit möglichst vielen Hinweisen und Ideen":
-            retriever.search_kwargs["k"] = 20
-            logging.info("Retriever parameter updated: k=20 for more creative answers")
+    # def update_retriever_parameters(choice, input):
+    #     # drop previously loaded llm model
+    #     if 'llm' in globals() and llm is not None:
+    #         try:
+    #             del llm
+    #             gc.collect()
+    #             mx.metal.clear_cache()
+    #             logging.info("Previous LLM deleted and memory freed.")
+    #         except Exception as e:
+    #             logging.warning(f"Could not delete previous LLM: {e}")
+    #             llm = None
+    #     if choice == "Antworte möglichst genau":
+    #         retriever.search_kwargs["k"] = 20
+    #         logging.info("Retriever parameter updated: k=20 for precise answers")
+    #     elif choice == "Antworte mit möglichst vielen Hinweisen und Ideen":
+    #         retriever.search_kwargs["k"] = 20
+    #         logging.info("Retriever parameter updated: k=20 for more creative answers")
 
     template = """INSTRUKTIONEN: Du musst nur auf Deutsch antworten.
     Du bist ein hilfreicher KI-Agent. Ich bin ein Sozialarbeiter im Einarbeitungsprozess und arbeite bei der Sozialhilfe in der Schweiz. 
@@ -436,9 +388,9 @@ if __name__ == "__main__":
     prompt = ChatPromptTemplate.from_template(template)
     doc_chain = create_stuff_documents_chain(llm, prompt)
     chain = create_retrieval_chain(retriever, doc_chain)
-    
-    
-    with gr.Blocks(css=".gradio-container { font-size: 6px; }") as app:
+
+
+    with gr.Blocks(css=".gradio-container { font-size: 12px; }") as app:
         gr.Markdown("# Suchassistent für Sozialarbeitende")
         query_input = gr.Textbox(label="Formuliere deine Frage", placeholder="Was möchtest du wissen?", lines=2)
 
