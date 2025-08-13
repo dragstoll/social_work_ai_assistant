@@ -24,6 +24,8 @@ available_models = {
     "Llama-4-Maverick-17B-4bit": "mlx-community/Llama-4-Maverick-17B-16E-Instruct-4bit",
     "Llama-4-Scout-17B-4bit": "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit",
     "Mistral-Nemo-Instruct-2407-4bit": "mlx-community/Mistral-Nemo-Instruct-2407-4bit",
+    "SmolLM3-3B-4bit": "mlx-community/SmolLM3-3B-4bit",
+    "Qwen3-4B-4bit": "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 }
 
 # Function to select a model
@@ -32,11 +34,11 @@ def select_model(model_name):
         logging.info(f"Model selected: {model_name}")
         return available_models[model_name]
     else:
-        logging.error(f"Invalid model name: {model_name}. Defaulting to Mistral-Small-2501-4bit.")
-        return available_models["Mistral-Small-2501-4bit"]
+        logging.error(f"Invalid model name: {model_name}. Defaulting to Qwen3-4B-4bit.")
+        return available_models["Qwen3-4B-4bit"]
 
 # Example: Set the model to use
-selected_model = select_model("Gemma-3-27B-4bit")  # Default model
+selected_model = select_model("Qwen3-4B-4bit")  # Default model
 # log the model that has been selected
 logging.info(f"Selected model: {selected_model}")
 
@@ -113,17 +115,35 @@ def ask_question_with_chunks(query):
     return answer
 
 # Load the MLXPipeline model immediately
+import gc
+# Ensure any previous LLM is dropped and GPU memory is freed before first load
+if 'llm' in globals() and llm is not None:
+    try:
+        del llm
+        gc.collect()
+        logging.info("Previous LLM deleted and memory freed before first load.")
+    except Exception as e:
+        logging.warning(f"Could not delete previous LLM: {e}")
+
+# Load the MLXPipeline model immediately
 llm = MLXPipeline.from_model_id(
     selected_model,
-    pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
+    pipeline_kwargs={"max_tokens": 512, "temp": 0.1},
 )
 logging.info(f"LLM loaded for RAG: {selected_model}")
 
 # Function to update RAG parameters, reload documents, and rerun all necessary functions
 def update_rag_parameters(option):
+    import gc
     global retriever, llm, chain, documents, vectorstore, prompt
     logging.info(f"Updating RAG parameters based on user selection: {option}")
     try:
+        # Free previous LLM and GPU memory
+        if 'llm' in globals() and llm is not None:
+            del llm
+            gc.collect()
+            logging.info("Previous LLM deleted and memory freed.")
+
         # Reload documents
         folder_path = "./documents"
         logging.info("Reloading documents...")
@@ -150,9 +170,6 @@ def update_rag_parameters(option):
             page = doc.metadata.get("page", "Unbekannte Seite")
             doc.page_content += f" ({source}, Seite {page})"
 
-        # Save the chunks to a file
-        # save_chunks_to_file(documents)
-
         # Recreate vectorstore
         logging.info("Recreating vectorstore...")
         embeddings = HuggingFaceEmbeddings(
@@ -170,6 +187,9 @@ def update_rag_parameters(option):
                 pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
             )
             logging.info(f"LLM reloaded for precise answers: {selected_model}")
+            # Recreate the chain
+            doc_chain = create_stuff_documents_chain(llm, prompt)
+            chain = create_retrieval_chain(retriever, doc_chain)
             return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
         elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
             retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 20})
@@ -179,11 +199,13 @@ def update_rag_parameters(option):
                 pipeline_kwargs={"max_tokens": 2024, "temp": 0.6},
             )
             logging.info(f"LLM reloaded for creative answers: {selected_model}")
+            # Recreate the chain
+            doc_chain = create_stuff_documents_chain(llm, prompt)
+            chain = create_retrieval_chain(retriever, doc_chain)
             return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
 
-        # Recreate the chain
+        # Recreate the chain for other cases
         doc_chain = create_stuff_documents_chain(llm, prompt)
-        
         chain = create_retrieval_chain(retriever, doc_chain)
         print("bla")
     except Exception as e:
@@ -318,8 +340,8 @@ def load_uploaded_files_for_rag():
         # Recreate the retriever and chain with the new vectorstore
         # Use the currently selected RAG parameters (k value)
         current_k = retriever.search_kwargs.get("k", 8) # Get current k or default to 8
-        retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": current_k})
-        
+        retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": current_k})
+
         # Recreate the chain with the updated retriever
         doc_chain = create_stuff_documents_chain(llm, prompt)
         chain = create_retrieval_chain(retriever, doc_chain)
@@ -370,7 +392,7 @@ if __name__ == "__main__":
 
     vectorstore = Chroma.from_documents(documents, embeddings)
     # Set the default retriever parameters
-    retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
+    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 8})
 
     # Update retriever parameters based on user choice
     def update_retriever_parameters(choice, input):
@@ -383,9 +405,10 @@ if __name__ == "__main__":
 
     template = """INSTRUKTIONEN: Du musst nur auf Deutsch antworten.
     Du bist ein hilfreicher KI-Agent. Ich bin ein Sozialarbeiter im Einarbeitungsprozess und arbeite bei der Sozialhilfe in der Schweiz. 
-    Bitte Suche in den dir zu zurverfügunggestellen Dokumenten und gibt mir möglichst genaue und hilfreiche Antworten auf meine Frage. 
+    Suche in den Dokumenten und gibt mir möglichst genaue und hilfreiche Antworten auf meine Frage. 
     Wenn es keine Hinweise in den Dokumenten gibt, sage mir, dass ich die Frage nicht beantworten kann.
     Gib mir immer eine Quellenangabe deiner Antwort (zum Beispiel "Dokument 1, , Seite 3")
+    Du darfst dich nicht wiederholen beim Antworten.
     FRAGE: {input} 
     KONTEXT: {context} 
     ANTWORT:"""
@@ -401,38 +424,7 @@ if __name__ == "__main__":
 
         response_output = gr.Textbox(label="Antwort", interactive=False)
 
-        # File upload and listing section
-        gr.Markdown("### Dateien hochladen und anzeigen:")
-        with gr.Row():
-            file_upload = gr.File(label="Lade PDF-Dateien hoch", file_types=[".pdf"], file_count="multiple")
-            upload_button = gr.Button("Hochladen")
-            list_files_button = gr.Button("Geladene Dateien anzeigen")
-        uploaded_files_output = gr.Textbox(label="Geladene Dateien", interactive=False)
-
-        # Button to load uploaded files for RAG processing
-        load_files_button = gr.Button("Geladene Dateien für RAG verarbeiten")
-        load_files_output = gr.Textbox(label="Status", interactive=False)
-
-        # Trigger file upload
-        upload_button.click(
-            upload_files,
-            inputs=[file_upload],
-            outputs=[uploaded_files_output],
-        )
-
-        # List already loaded files
-        list_files_button.click(
-            list_loaded_files,
-            inputs=[],
-            outputs=[uploaded_files_output],
-        )
-
-        # Load uploaded files for RAG processing
-        load_files_button.click(
-            load_uploaded_files_for_rag,
-            inputs=[],
-            outputs=[load_files_output],
-        )
+       
 
         # Add buttons for RAG parameter selection
         gr.Markdown("### Wähle eine Antwortstrategie:")
@@ -500,7 +492,38 @@ if __name__ == "__main__":
         gr.Markdown("Beispiel: \"Was muss ich beachten, wenn ich Sozialhilfe beantrage?\"")
         gr.Markdown("Beispiel: \"Wie lange dauert es, bis ich eine Antwort auf mein Gesuch erhalte?\"")
         
+         # File upload and listing section
+        gr.Markdown("### Dateien hochladen und anzeigen:")
+        with gr.Row():
+            file_upload = gr.File(label="Lade PDF-Dateien hoch", file_types=[".pdf"], file_count="multiple")
+            upload_button = gr.Button("Hochladen")
+            list_files_button = gr.Button("Geladene Dateien anzeigen")
+        uploaded_files_output = gr.Textbox(label="Geladene Dateien", interactive=False)
 
+        # Button to load uploaded files for RAG processing
+        load_files_button = gr.Button("Geladene Dateien für RAG verarbeiten")
+        load_files_output = gr.Textbox(label="Status", interactive=False)
+
+        # Trigger file upload
+        upload_button.click(
+            upload_files,
+            inputs=[file_upload],
+            outputs=[uploaded_files_output],
+        )
+
+        # List already loaded files
+        list_files_button.click(
+            list_loaded_files,
+            inputs=[],
+            outputs=[uploaded_files_output],
+        )
+
+        # Load uploaded files for RAG processing
+        load_files_button.click(
+            load_uploaded_files_for_rag,
+            inputs=[],
+            outputs=[load_files_output],
+        )
         # Corrected CSS to ensure font size is applied properly
         app.css += """
         #active-button {
