@@ -130,7 +130,7 @@ llm = MLXPipeline.from_model_id(
     selected_model,
     pipeline_kwargs={"max_tokens": 512, "temp": 0.1},
 )
-logging.info(f"LLM loaded for RAG: {selected_model}")
+logging.info(f"LLM loaded for RAG (initial, möglichst genau): {selected_model}")
 
 # Function to update RAG parameters, reload documents, and rerun all necessary functions
 def update_rag_parameters(option):
@@ -182,9 +182,19 @@ def update_rag_parameters(option):
         if option == "Antworte möglichst genau":
             retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
             logging.info("RAG parameters updated: k=8, temp=0.1. Reloading model...")
+            # unload the previous LLM
+            if 'llm' in globals() and llm is not None:
+                try:
+                    del llm
+                    gc.collect()
+                    logging.info("Previous LLM deleted and memory freed.")
+                except Exception as e:
+                    logging.warning(f"Could not delete previous LLM: {e}")
+                    llm = None
+            #reload the LLM with new params
             llm = MLXPipeline.from_model_id(
                 selected_model,
-                pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
+                pipeline_kwargs={"max_tokens": 512, "temp": 0.1},
             )
             logging.info(f"LLM reloaded for precise answers: {selected_model}")
             # Recreate the chain
@@ -194,9 +204,19 @@ def update_rag_parameters(option):
         elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
             retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 20})
             logging.info("RAG parameters updated: k=20, temp=0.6. Reloading model...")
+            # unload the previous LLM
+            if 'llm' in globals() and llm is not None:
+                try:
+                    del llm
+                    gc.collect()
+                    logging.info("Previous LLM deleted and memory freed.")
+                except Exception as e:
+                    logging.warning(f"Could not delete previous LLM: {e}")
+                    llm = None
+            #reload the LLM with new params
             llm = MLXPipeline.from_model_id(
                 selected_model,
-                pipeline_kwargs={"max_tokens": 2024, "temp": 0.6},
+                pipeline_kwargs={"max_tokens": 512, "temp": 0.6},
             )
             logging.info(f"LLM reloaded for creative answers: {selected_model}")
             # Recreate the chain
@@ -429,7 +449,7 @@ if __name__ == "__main__":
         # Add buttons for RAG parameter selection
         gr.Markdown("### Wähle eine Antwortstrategie:")
         with gr.Row():
-            precise_button = gr.Button("Antworte möglichst genau", elem_id="inactive-button")
+            precise_button = gr.Button("Antworte möglichst genau", elem_id="active-button")
             creative_button = gr.Button("Antworte mit möglichst vielen Hinweisen und Ideen", elem_id="inactive-button")
 
         # Place buttons for query execution
