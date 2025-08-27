@@ -1,8 +1,8 @@
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import OllamaEmbeddings  # Changed to OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain_community.llms.mlx_pipeline import MLXPipeline
+from langchain_community.llms import Ollama  # Changed to Ollama
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
@@ -14,29 +14,25 @@ import json
 import csv  # Add CSV module for saving evaluations
 
 
-# Define the available models and allow the user to choose one
+# Define the available models for Ollama (local)
 available_models = {
-    "QwQ-32B-4bit": "mlx-community/QwQ-32B-4bit",
-    "Gemma-3-27B-4bit": "mlx-community/gemma-3-27b-it-4bit",
-    "Qwen2.5-32B-Instruct-4bit": "mlx-community/Qwen2.5-32B-Instruct-4bit",
-    "Mistral-Large-2407-4bit": "mlx-community/Mistral-Large-Instruct-2407-4bit",
-    "Mistral-Small-2501-4bit": "mlx-community/Mistral-Small-24B-Instruct-2501-4bit",
-    "Llama-4-Maverick-17B-4bit": "mlx-community/Llama-4-Maverick-17B-16E-Instruct-4bit",
-    "Llama-4-Scout-17B-4bit": "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit",
-    "Mistral-Nemo-Instruct-2407-4bit": "mlx-community/Mistral-Nemo-Instruct-2407-4bit",
+    # "llama3": "llama3",
+    # "mistral": "mistral",
+    "gemma": "gemma3:4b-it-q4_K_M",
+    "qwen": "qwen3:30b-a3b-instruct-2507-q4_K_M",
+    # Add more local Olloma models as needed
 }
 
-# Function to select a model
 def select_model(model_name):
     if model_name in available_models:
         logging.info(f"Model selected: {model_name}")
         return available_models[model_name]
     else:
-        logging.error(f"Invalid model name: {model_name}. Defaulting to Mistral-Small-2501-4bit.")
-        return available_models["Mistral-Small-2501-4bit"]
+        logging.error(f"Invalid model name: {model_name}. Defaulting to qwen.")
+        return available_models["qwen"]
 
 # Example: Set the model to use
-selected_model = select_model("Gemma-3-27B-4bit")  # Default model
+selected_model = select_model("qwen")  # Default model
 # log the model that has been selected
 logging.info(f"Selected model: {selected_model}")
 
@@ -112,10 +108,10 @@ def ask_question_with_chunks(query):
 
     return answer
 
-# Load the MLXPipeline model immediately
-llm = MLXPipeline.from_model_id(
-    selected_model,
-    pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
+# Load the Ollama LLM model immediately
+llm = Ollama(
+    model=selected_model,
+    # You can add additional parameters if needed, e.g. temperature, etc.
 )
 logging.info(f"LLM loaded for RAG: {selected_model}")
 
@@ -124,7 +120,6 @@ def update_rag_parameters(option):
     global retriever, llm, chain, documents, vectorstore, prompt
     logging.info(f"Updating RAG parameters based on user selection: {option}")
     try:
-        # Reload documents
         folder_path = "./documents"
         logging.info("Reloading documents...")
         documents = load_all_documents(folder_path)
@@ -133,7 +128,6 @@ def update_rag_parameters(option):
             return
         logging.info(f"{len(documents)} documents reloaded successfully.")
 
-        # Split documents into chunks
         logging.info("Splitting documents into chunks...")
         documents = RecursiveCharacterTextSplitter(
             chunk_size=1000,
@@ -144,46 +138,29 @@ def update_rag_parameters(option):
             return
         logging.info(f"{len(documents)} chunks created successfully.")
 
-        # Append document name and page number to each chunk
         for doc in documents:
             source = doc.metadata.get("source", "Unbekanntes Dokument")
             page = doc.metadata.get("page", "Unbekannte Seite")
             doc.page_content += f" ({source}, Seite {page})"
 
-        # Save the chunks to a file
-        # save_chunks_to_file(documents)
-
-        # Recreate vectorstore
-        logging.info("Recreating vectorstore...")
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            encode_kwargs={"normalize_embeddings": True},
-        )
+        # Use OllamaEmbeddings for local embedding
+        embeddings = OllamaEmbeddings(model="jeffh/intfloat-multilingual-e5-large-instruct:q8_0")  # Use your local embedding model name
         vectorstore = Chroma.from_documents(documents, embeddings)
 
-        # Update retriever and LLM based on the selected option
         if option == "Antworte möglichst genau":
             retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
             logging.info("RAG parameters updated: k=8, temp=0.1. Reloading model...")
-            llm = MLXPipeline.from_model_id(
-                selected_model,
-                pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
-            )
+            llm = Ollama(model=selected_model)
             logging.info(f"LLM reloaded for precise answers: {selected_model}")
             return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
         elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
             retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 20})
             logging.info("RAG parameters updated: k=20, temp=0.6. Reloading model...")
-            llm = MLXPipeline.from_model_id(
-                selected_model,
-                pipeline_kwargs={"max_tokens": 2024, "temp": 0.6},
-            )
+            llm = Ollama(model=selected_model)
             logging.info(f"LLM reloaded for creative answers: {selected_model}")
             return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
 
-        # Recreate the chain
         doc_chain = create_stuff_documents_chain(llm, prompt)
-        
         chain = create_retrieval_chain(retriever, doc_chain)
         print("bla")
     except Exception as e:
@@ -275,20 +252,16 @@ def upload_files(files):
 
 # Function to load all uploaded files for RAG processing
 def load_uploaded_files_for_rag():
-    global vectorstore, retriever, chain # Ensure global variables are modified
+    global vectorstore, retriever, chain
     try:
         logging.info("Loading uploaded files for RAG processing...")
-        # Use the dedicated directory for uploaded files
         documents = load_all_documents(uploaded_files_dir)
         if not documents:
             logging.warning("No documents were loaded from the uploaded files directory.")
-            # Keep existing vectorstore if no new files are loaded? Or clear it?
-            # For now, return a message indicating no new files processed.
             return "No new documents found in the upload directory to process."
 
         logging.info(f"Loaded {len(documents)} documents from {uploaded_files_dir}.")
 
-        # Split documents into chunks
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=100,
@@ -299,28 +272,18 @@ def load_uploaded_files_for_rag():
             return "Failed to split uploaded documents into chunks."
         logging.info(f"Split uploaded documents into {len(split_docs)} chunks.")
 
-        # Append document name and page number to each chunk
         for doc in split_docs:
             source = doc.metadata.get("source", "Unknown Document")
             page = doc.metadata.get("page", "Unknown Page")
             doc.page_content += f" ({source}, Page {page})"
 
-        # Recreate vectorstore with the new documents
-        # Consider adding to existing store vs. replacing
-        # Current implementation replaces the vectorstore
-        logging.info("Recreating vectorstore with uploaded documents...")
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            encode_kwargs={"normalize_embeddings": True},
-        )
+        # Use OllamaEmbeddings for local embedding
+        embeddings = OllamaEmbeddings(model="jeffh/intfloat-multilingual-e5-large-instruct:q8_0")  # Use your local embedding model name
         vectorstore = Chroma.from_documents(split_docs, embeddings)
 
-        # Recreate the retriever and chain with the new vectorstore
-        # Use the currently selected RAG parameters (k value)
-        current_k = retriever.search_kwargs.get("k", 8) # Get current k or default to 8
+        current_k = retriever.search_kwargs.get("k", 8)
         retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": current_k})
-        
-        # Recreate the chain with the updated retriever
+
         doc_chain = create_stuff_documents_chain(llm, prompt)
         chain = create_retrieval_chain(retriever, doc_chain)
 
@@ -350,7 +313,6 @@ if __name__ == "__main__":
             else:
                 logging.info(f"{len(documents)} chunks created successfully.")
 
-                # Append document name and page number to each chunk
                 for doc in documents:
                     source = doc.metadata.get("source", "Unbekanntes Dokument")
                     page = doc.metadata.get("page", "Unbekannte Seite")
@@ -361,15 +323,10 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Error during document splitting: {e}")
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
-        encode_kwargs={
-            "normalize_embeddings": True,
-        },
-    )
+    # Use OllamaEmbeddings for local embedding
+    embeddings = OllamaEmbeddings(model="jeffh/intfloat-multilingual-e5-large-instruct:q8_0")  # Use your local embedding model name
 
     vectorstore = Chroma.from_documents(documents, embeddings)
-    # Set the default retriever parameters
     retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
 
     # Update retriever parameters based on user choice
@@ -395,49 +352,18 @@ if __name__ == "__main__":
     chain = create_retrieval_chain(retriever, doc_chain)
     
     
-    with gr.Blocks(css=".gradio-container { font-size: 6px; }") as app:
+    with gr.Blocks(css=".gradio-container { font-size: 12px; }") as app:
         gr.Markdown("# Suchassistent für Sozialarbeitende")
         query_input = gr.Textbox(label="Formuliere deine Frage", placeholder="Was möchtest du wissen?", lines=2)
 
         response_output = gr.Textbox(label="Antwort", interactive=False)
 
-        # File upload and listing section
-        gr.Markdown("### Dateien hochladen und anzeigen:")
-        with gr.Row():
-            file_upload = gr.File(label="Lade PDF-Dateien hoch", file_types=[".pdf"], file_count="multiple")
-            upload_button = gr.Button("Hochladen")
-            list_files_button = gr.Button("Geladene Dateien anzeigen")
-        uploaded_files_output = gr.Textbox(label="Geladene Dateien", interactive=False)
-
-        # Button to load uploaded files for RAG processing
-        load_files_button = gr.Button("Geladene Dateien für RAG verarbeiten")
-        load_files_output = gr.Textbox(label="Status", interactive=False)
-
-        # Trigger file upload
-        upload_button.click(
-            upload_files,
-            inputs=[file_upload],
-            outputs=[uploaded_files_output],
-        )
-
-        # List already loaded files
-        list_files_button.click(
-            list_loaded_files,
-            inputs=[],
-            outputs=[uploaded_files_output],
-        )
-
-        # Load uploaded files for RAG processing
-        load_files_button.click(
-            load_uploaded_files_for_rag,
-            inputs=[],
-            outputs=[load_files_output],
-        )
+       
 
         # Add buttons for RAG parameter selection
         gr.Markdown("### Wähle eine Antwortstrategie:")
         with gr.Row():
-            precise_button = gr.Button("Antworte möglichst genau", elem_id="inactive-button")
+            precise_button = gr.Button("Antworte möglichst genau", elem_id="active-button")
             creative_button = gr.Button("Antworte mit möglichst vielen Hinweisen und Ideen", elem_id="inactive-button")
 
         # Place buttons for query execution
@@ -500,7 +426,38 @@ if __name__ == "__main__":
         gr.Markdown("Beispiel: \"Was muss ich beachten, wenn ich Sozialhilfe beantrage?\"")
         gr.Markdown("Beispiel: \"Wie lange dauert es, bis ich eine Antwort auf mein Gesuch erhalte?\"")
         
+         # File upload and listing section
+        gr.Markdown("### Dateien hochladen und anzeigen:")
+        with gr.Row():
+            file_upload = gr.File(label="Lade PDF-Dateien hoch", file_types=[".pdf"], file_count="multiple")
+            upload_button = gr.Button("Hochladen")
+            list_files_button = gr.Button("Geladene Dateien anzeigen")
+        uploaded_files_output = gr.Textbox(label="Geladene Dateien", interactive=False)
 
+        # Button to load uploaded files for RAG processing
+        load_files_button = gr.Button("Geladene Dateien für RAG verarbeiten")
+        load_files_output = gr.Textbox(label="Status", interactive=False)
+
+        # Trigger file upload
+        upload_button.click(
+            upload_files,
+            inputs=[file_upload],
+            outputs=[uploaded_files_output],
+        )
+
+        # List already loaded files
+        list_files_button.click(
+            list_loaded_files,
+            inputs=[],
+            outputs=[uploaded_files_output],
+        )
+
+        # Load uploaded files for RAG processing
+        load_files_button.click(
+            load_uploaded_files_for_rag,
+            inputs=[],
+            outputs=[load_files_output],
+        )
         # Corrected CSS to ensure font size is applied properly
         app.css += """
         #active-button {
