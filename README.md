@@ -21,6 +21,44 @@ The **Social Work AI Assistant** is an AI-powered assistant designed to help soc
 
 ## Installation
 
+### 0. Install Python and pip (if not already installed)
+
+If your computer does **not** have Python or pip installed, follow these steps:
+
+- **Windows**:
+  1. Download Python from [https://www.python.org/downloads/windows/](https://www.python.org/downloads/windows/).
+  2. Run the installer and ensure you check the box "Add Python to PATH".
+  3. After installation, open Command Prompt and verify:
+     ```bash
+     python --version
+     pip --version
+     ```
+
+- **macOS**:
+  - Python 3 is often pre-installed. If not, install via [Homebrew](https://brew.sh/):
+    ```bash
+    brew install python
+    ```
+  - Verify installation:
+    ```bash
+    python3 --version
+    pip3 --version
+    ```
+
+- **Linux**:
+  - Install Python and pip using your package manager, e.g.:
+    ```bash
+    sudo apt update
+    sudo apt install python3 python3-pip
+    ```
+  - Verify installation:
+    ```bash
+    python3 --version
+    pip3 --version
+    ```
+
+> If you have both `python` and `python3` on your system, use `python3` and `pip3` for commands.
+
 ### 1. Install Python dependencies
 ```bash
 pip install -r requirements.txt
@@ -66,9 +104,17 @@ ollama serve
 ```
 
 ### 2. Run the Gradio app
-```bash
-python ai_agent_socialwork_ollama.py
-```
+
+If you installed Python as above, use the appropriate command for your system:
+
+- **Windows**:
+  ```bash
+  python ai_agent_socialwork_ollama.py
+  ```
+- **macOS/Linux**:
+  ```bash
+  python3 ai_agent_socialwork_ollama.py
+  ```
 
 ### 3. Access the app in your browser
 Go to [http://0.0.0.0:7860](http://0.0.0.0:7860).
