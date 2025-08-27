@@ -132,12 +132,12 @@ If you do **not** have a GPU, you can still run the assistant using smaller quan
 
 1. **Choose small models for Ollama**  
    - Use models with names ending in `q4`, `q8`, or similar (quantized).
-   - Example: `gemma:4b-it-q4_K_M`, `jeffh/intfloat-multilingual-e5-large-instruct:q8_0`.
+   - Example: `gemma:4b-it-q4_K_M`, `ollama pull jeffh/intfloat-multilingual-e5-small:q8_0`.
 
 2. **Pull only the required models**  
    ```bash
    ollama pull gemma:4b-it-q4_K_M
-   ollama pull jeffh/intfloat-multilingual-e5-large-instruct:q8_0
+   ollama pull jeffh/intfloat-multilingual-e5-small:q8_0
    ```
 
 3. **Edit `ai_agent_socialwork_ollama.py` if needed**  
