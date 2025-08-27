@@ -12,7 +12,8 @@ import logging
 import sys
 import json
 import csv  # Add CSV module for saving evaluations
-
+import gc
+import mlx.core as mx
 
 # Define the available models and allow the user to choose one
 available_models = {
@@ -24,6 +25,8 @@ available_models = {
     "Llama-4-Maverick-17B-4bit": "mlx-community/Llama-4-Maverick-17B-16E-Instruct-4bit",
     "Llama-4-Scout-17B-4bit": "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit",
     "Mistral-Nemo-Instruct-2407-4bit": "mlx-community/Mistral-Nemo-Instruct-2407-4bit",
+    "SmolLM3-3B-4bit": "mlx-community/SmolLM3-3B-4bit",
+    "Qwen3-4B-4bit": "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 }
 
 # Function to select a model
@@ -32,11 +35,11 @@ def select_model(model_name):
         logging.info(f"Model selected: {model_name}")
         return available_models[model_name]
     else:
-        logging.error(f"Invalid model name: {model_name}. Defaulting to Mistral-Small-2501-4bit.")
-        return available_models["Mistral-Small-2501-4bit"]
+        logging.error(f"Invalid model name: {model_name}. Defaulting to Qwen3-4B-4bit.")
+        return available_models["Qwen3-4B-4bit"]
 
 # Example: Set the model to use
-selected_model = select_model("Gemma-3-27B-4bit")  # Default model
+selected_model = select_model("Qwen3-4B-4bit")  # Default model
 # log the model that has been selected
 logging.info(f"Selected model: {selected_model}")
 
@@ -113,82 +116,63 @@ def ask_question_with_chunks(query):
     return answer
 
 # Load the MLXPipeline model immediately
+import gc
+# Ensure any previous LLM is dropped and GPU memory is freed before first load
+if 'llm' in globals() and llm is not None:
+    try:
+        del llm
+        gc.collect()
+        logging.info("Previous LLM deleted and memory freed before first load.")
+    except Exception as e:
+        logging.warning(f"Could not delete previous LLM: {e}")
+
+# Load the MLXPipeline model immediately
 llm = MLXPipeline.from_model_id(
     selected_model,
-    pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
+    pipeline_kwargs={"max_tokens": 512, "temp": 0.1},
 )
-logging.info(f"LLM loaded for RAG: {selected_model}")
+logging.info(f"LLM loaded for RAG (initial, möglichst genau): {selected_model}")
 
 # Function to update RAG parameters, reload documents, and rerun all necessary functions
 def update_rag_parameters(option):
-    global retriever, llm, chain, documents, vectorstore, prompt
-    logging.info(f"Updating RAG parameters based on user selection: {option}")
-    try:
-        # Reload documents
-        folder_path = "./documents"
-        logging.info("Reloading documents...")
-        documents = load_all_documents(folder_path)
-        if not documents:
-            logging.error("No documents were loaded. Please check the folder path and document files.")
-            return
-        logging.info(f"{len(documents)} documents reloaded successfully.")
-
-        # Split documents into chunks
-        logging.info("Splitting documents into chunks...")
-        documents = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=100,
-        ).split_documents(documents)
-        if not documents:
-            logging.error("No chunks were created. Please check the document processing logic.")
-            return
-        logging.info(f"{len(documents)} chunks created successfully.")
-
-        # Append document name and page number to each chunk
-        for doc in documents:
-            source = doc.metadata.get("source", "Unbekanntes Dokument")
-            page = doc.metadata.get("page", "Unbekannte Seite")
-            doc.page_content += f" ({source}, Seite {page})"
-
-        # Save the chunks to a file
-        # save_chunks_to_file(documents)
-
-        # Recreate vectorstore
-        logging.info("Recreating vectorstore...")
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            encode_kwargs={"normalize_embeddings": True},
+    global llm
+    # Update retriever and LLM based on the selected option
+    if option == "Antworte möglichst genau":
+        # unload the previous LLM
+        del llm
+        gc.collect()
+        mx.metal.clear_cache()
+        logging.info("Previous LLM deleted and memory freed.")
+        #reload the LLM with new params
+        llm = MLXPipeline.from_model_id(
+            selected_model,
+            pipeline_kwargs={"max_tokens": 512, "temp": 0.1},
         )
-        vectorstore = Chroma.from_documents(documents, embeddings)
-
-        # Update retriever and LLM based on the selected option
-        if option == "Antworte möglichst genau":
-            retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
-            logging.info("RAG parameters updated: k=8, temp=0.1. Reloading model...")
-            llm = MLXPipeline.from_model_id(
-                selected_model,
-                pipeline_kwargs={"max_tokens": 2024, "temp": 0.1},
-            )
-            logging.info(f"LLM reloaded for precise answers: {selected_model}")
-            return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
-        elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
-            retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 20})
-            logging.info("RAG parameters updated: k=20, temp=0.6. Reloading model...")
-            llm = MLXPipeline.from_model_id(
-                selected_model,
-                pipeline_kwargs={"max_tokens": 2024, "temp": 0.6},
-            )
-            logging.info(f"LLM reloaded for creative answers: {selected_model}")
-            return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
-
+        gc.collect()
+        mx.metal.clear_cache()
+        logging.info(f"LLM reloaded for precise answers: {selected_model}")
         # Recreate the chain
-        doc_chain = create_stuff_documents_chain(llm, prompt)
         
-        chain = create_retrieval_chain(retriever, doc_chain)
-        print("bla")
-    except Exception as e:
-        logging.error(f"Error while updating RAG parameters, reloading documents, or rerunning functions: {e}")
+        return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
+    elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
+        # unload the previous LLM
+        del llm
+        gc.collect()
+        logging.info("Previous LLM deleted and memory freed.")
 
+        #reload the LLM with new params and overwrite llm
+        llm = MLXPipeline.from_model_id(
+            selected_model,
+            pipeline_kwargs={"max_tokens": 512, "temp": 0.7},
+        )
+        logging.info(f"LLM reloaded for creative answers: {selected_model}")
+        # Recreate the chain
+        
+        gc.collect()
+        mx.metal.clear_cache()
+        return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
+
+        
 # Function to log and save evaluation, ensuring it can only be done once
 evaluation_done = False  # Global flag to track if evaluation has been done
 
@@ -317,9 +301,9 @@ def load_uploaded_files_for_rag():
 
         # Recreate the retriever and chain with the new vectorstore
         # Use the currently selected RAG parameters (k value)
-        current_k = retriever.search_kwargs.get("k", 8) # Get current k or default to 8
+        current_k = retriever.search_kwargs.get("k", 20) # Get current k or default to 8
         retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": current_k})
-        
+
         # Recreate the chain with the updated retriever
         doc_chain = create_stuff_documents_chain(llm, prompt)
         chain = create_retrieval_chain(retriever, doc_chain)
@@ -370,22 +354,33 @@ if __name__ == "__main__":
 
     vectorstore = Chroma.from_documents(documents, embeddings)
     # Set the default retriever parameters
-    retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
+    retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 20})
 
     # Update retriever parameters based on user choice
-    def update_retriever_parameters(choice, input):
-        if choice == "Antworte möglichst genau":
-            retriever.search_kwargs["k"] = 8
-            logging.info("Retriever parameter updated: k=8 for precise answers")
-        elif choice == "Antworte mit möglichst vielen Hinweisen und Ideen":
-            retriever.search_kwargs["k"] = 20
-            logging.info("Retriever parameter updated: k=20 for more creative answers")
+    # def update_retriever_parameters(choice, input):
+    #     # drop previously loaded llm model
+    #     if 'llm' in globals() and llm is not None:
+    #         try:
+    #             del llm
+    #             gc.collect()
+    #             mx.metal.clear_cache()
+    #             logging.info("Previous LLM deleted and memory freed.")
+    #         except Exception as e:
+    #             logging.warning(f"Could not delete previous LLM: {e}")
+    #             llm = None
+    #     if choice == "Antworte möglichst genau":
+    #         retriever.search_kwargs["k"] = 20
+    #         logging.info("Retriever parameter updated: k=20 for precise answers")
+    #     elif choice == "Antworte mit möglichst vielen Hinweisen und Ideen":
+    #         retriever.search_kwargs["k"] = 20
+    #         logging.info("Retriever parameter updated: k=20 for more creative answers")
 
     template = """INSTRUKTIONEN: Du musst nur auf Deutsch antworten.
     Du bist ein hilfreicher KI-Agent. Ich bin ein Sozialarbeiter im Einarbeitungsprozess und arbeite bei der Sozialhilfe in der Schweiz. 
-    Bitte Suche in den dir zu zurverfügunggestellen Dokumenten und gibt mir möglichst genaue und hilfreiche Antworten auf meine Frage. 
+    Suche in den Dokumenten und gibt mir möglichst genaue und hilfreiche Antworten auf meine Frage. 
     Wenn es keine Hinweise in den Dokumenten gibt, sage mir, dass ich die Frage nicht beantworten kann.
     Gib mir immer eine Quellenangabe deiner Antwort (zum Beispiel "Dokument 1, , Seite 3")
+    Du darfst dich nicht wiederholen beim Antworten.
     FRAGE: {input} 
     KONTEXT: {context} 
     ANTWORT:"""
@@ -393,51 +388,20 @@ if __name__ == "__main__":
     prompt = ChatPromptTemplate.from_template(template)
     doc_chain = create_stuff_documents_chain(llm, prompt)
     chain = create_retrieval_chain(retriever, doc_chain)
-    
-    
-    with gr.Blocks(css=".gradio-container { font-size: 6px; }") as app:
+
+
+    with gr.Blocks(css=".gradio-container { font-size: 12px; }") as app:
         gr.Markdown("# Suchassistent für Sozialarbeitende")
         query_input = gr.Textbox(label="Formuliere deine Frage", placeholder="Was möchtest du wissen?", lines=2)
 
         response_output = gr.Textbox(label="Antwort", interactive=False)
 
-        # File upload and listing section
-        gr.Markdown("### Dateien hochladen und anzeigen:")
-        with gr.Row():
-            file_upload = gr.File(label="Lade PDF-Dateien hoch", file_types=[".pdf"], file_count="multiple")
-            upload_button = gr.Button("Hochladen")
-            list_files_button = gr.Button("Geladene Dateien anzeigen")
-        uploaded_files_output = gr.Textbox(label="Geladene Dateien", interactive=False)
-
-        # Button to load uploaded files for RAG processing
-        load_files_button = gr.Button("Geladene Dateien für RAG verarbeiten")
-        load_files_output = gr.Textbox(label="Status", interactive=False)
-
-        # Trigger file upload
-        upload_button.click(
-            upload_files,
-            inputs=[file_upload],
-            outputs=[uploaded_files_output],
-        )
-
-        # List already loaded files
-        list_files_button.click(
-            list_loaded_files,
-            inputs=[],
-            outputs=[uploaded_files_output],
-        )
-
-        # Load uploaded files for RAG processing
-        load_files_button.click(
-            load_uploaded_files_for_rag,
-            inputs=[],
-            outputs=[load_files_output],
-        )
+       
 
         # Add buttons for RAG parameter selection
         gr.Markdown("### Wähle eine Antwortstrategie:")
         with gr.Row():
-            precise_button = gr.Button("Antworte möglichst genau", elem_id="inactive-button")
+            precise_button = gr.Button("Antworte möglichst genau", elem_id="active-button")
             creative_button = gr.Button("Antworte mit möglichst vielen Hinweisen und Ideen", elem_id="inactive-button")
 
         # Place buttons for query execution
@@ -500,7 +464,38 @@ if __name__ == "__main__":
         gr.Markdown("Beispiel: \"Was muss ich beachten, wenn ich Sozialhilfe beantrage?\"")
         gr.Markdown("Beispiel: \"Wie lange dauert es, bis ich eine Antwort auf mein Gesuch erhalte?\"")
         
+         # File upload and listing section
+        gr.Markdown("### Dateien hochladen und anzeigen:")
+        with gr.Row():
+            file_upload = gr.File(label="Lade PDF-Dateien hoch", file_types=[".pdf"], file_count="multiple")
+            upload_button = gr.Button("Hochladen")
+            list_files_button = gr.Button("Geladene Dateien anzeigen")
+        uploaded_files_output = gr.Textbox(label="Geladene Dateien", interactive=False)
 
+        # Button to load uploaded files for RAG processing
+        load_files_button = gr.Button("Geladene Dateien für RAG verarbeiten")
+        load_files_output = gr.Textbox(label="Status", interactive=False)
+
+        # Trigger file upload
+        upload_button.click(
+            upload_files,
+            inputs=[file_upload],
+            outputs=[uploaded_files_output],
+        )
+
+        # List already loaded files
+        list_files_button.click(
+            list_loaded_files,
+            inputs=[],
+            outputs=[uploaded_files_output],
+        )
+
+        # Load uploaded files for RAG processing
+        load_files_button.click(
+            load_uploaded_files_for_rag,
+            inputs=[],
+            outputs=[load_files_output],
+        )
         # Corrected CSS to ensure font size is applied properly
         app.css += """
         #active-button {

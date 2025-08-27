@@ -17,8 +17,9 @@
 # Ignore all .log files
 *.log
 
-<<<<<<< HEAD
-=======
+#  ignore .csv and .json files
+*.csv
+*.json
 
 >>>>>>> 33db73555b47bb9d6c382927b9e4b79766038c4d
 # Byte-compiled / optimized / DLL files
