@@ -12,36 +12,96 @@ The **Social Work AI Assistant** is an AI-powered assistant designed to help soc
 - **RAG Querying**: Uses a retrieval-augmented generation approach to answer user queries based on the loaded documents (initial and uploaded).
 - **Answer Evaluation**: Allows users to evaluate the quality of the answers with thumbs up or down. Evaluations are logged and saved to `evaluation_log.csv` for analysis.
 - **Customizable RAG Strategy**:
-  - **Precise Answers**: Focuses on the most relevant information by adjusting retriever settings (`k=8`) and LLM temperature (`temp=0.1`). Reloads necessary components.
-  - **Creative Answers**: Provides broader context with more clues by adjusting retriever settings (`k=20`) and LLM temperature (`temp=0.6`). Reloads necessary components.
-- **Model Selection**: Supports various MLX-compatible language models (selection currently hardcoded, see `ai_agent_socialwork_macos.py`).
+  - **Precise Answers**: Focuses on the most relevant information by adjusting retriever settings (`k=8`).
+  - **Creative Answers**: Provides broader context with more clues by adjusting retriever settings (`k=20`).
+- **Model Selection**: Uses local Ollama models for both embeddings and LLM inference (see below for setup).
 - **Retrieved Chunk Saving**: Saves the document chunks retrieved for the last query in JSON (`retrieved_chunks.json`) and CSV (`retrieved_chunks.csv`) formats for validation.
 - **Session Logging**: Logs all user interactions, system responses, and errors in a log file (`gradio_assisstant_macos.log`).
 - **Example Queries**: Displays example questions to guide users in formulating their queries.
 
 ## Installation
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   ```
-2. Install the required Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Place initial documents to be processed in the `./documents` folder.
-4. Create an empty `./uploaded_documents` folder for user uploads.
+
+### 1. Install Python dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Install Ollama (for local LLM and embedding models)
+Ollama is required for both language model inference and embeddings.
+
+- **macOS / Linux / Windows**:  
+  Download and install Ollama from [https://ollama.com/download](https://ollama.com/download).
+
+- **Start Ollama**:  
+  After installation, start the Ollama server:
+  ```bash
+  ollama serve
+  ```
+
+### 3. Download the required models
+You need to pull the models used for inference and embeddings.  
+For CPU-only usage, choose smaller models.
+
+#### Example (as used in `ai_agent_socialwork_ollama.py`):
+```bash
+# For LLM inference (choose one or more, smaller models recommended for CPU)
+ollama pull gemma:4b-it-q4_K_M
+ollama pull qwen3:30b-a3b-instruct-2507-q4_K_M
+
+# For embeddings (smaller multilingual model)
+ollama pull jeffh/intfloat-multilingual-e5-large-instruct:q8_0
+```
+> **Tip:** For CPU-only systems, use models with `q4`, `q8`, or other quantized versions (smaller, less memory usage).  
+> See [Ollama Model Library](https://ollama.com/library) for more options.
+
+### 4. Prepare document folders
+- Place initial documents to be processed in the `./documents` folder.
+- Create an empty `./uploaded_documents` folder for user uploads.
 
 ## Usage
-1. Run the Gradio app:
+
+### 1. Start Ollama server (if not already running)
+```bash
+ollama serve
+```
+
+### 2. Run the Gradio app
+```bash
+python ai_agent_socialwork_ollama.py
+```
+
+### 3. Access the app in your browser
+Go to [http://0.0.0.0:7860](http://0.0.0.0:7860).
+
+### 4. Workflow
+- **Optional:** Upload additional PDF documents using the "Lade PDF-Dateien hoch" section.
+- **Optional:** Click "Geladene Dateien für RAG verarbeiten" to include the uploaded documents in the knowledge base for subsequent queries.
+- Select an answer strategy ("Antworte möglichst genau" or "Antworte mit möglichst vielen Hinweisen und Ideen").
+- Enter your query and click "Ausführen" or press Enter.
+- Evaluate the answer using the 👍 or 👎 buttons.
+
+## CPU-Only Setup Instructions
+
+If you do **not** have a GPU, you can still run the assistant using smaller quantized models:
+
+1. **Choose small models for Ollama**  
+   - Use models with names ending in `q4`, `q8`, or similar (quantized).
+   - Example: `gemma:4b-it-q4_K_M`, `jeffh/intfloat-multilingual-e5-large-instruct:q8_0`.
+
+2. **Pull only the required models**  
    ```bash
-   python ai_agent_socialwork_macos.py
+   ollama pull gemma:4b-it-q4_K_M
+   ollama pull jeffh/intfloat-multilingual-e5-large-instruct:q8_0
    ```
-2. Access the app in your browser at `http://0.0.0.0:7860`.
-3. **Optional:** Upload additional PDF documents using the "Lade PDF-Dateien hoch" section.
-4. **Optional:** Click "Geladene Dateien für RAG verarbeiten" to include the uploaded documents in the knowledge base for subsequent queries.
-5. Select an answer strategy ("Antworte möglichst genau" or "Antworte mit möglichst vielen Hinweisen und Ideen").
-6. Enter your query and click "Ausführen" or press Enter.
-7. Evaluate the answer using the 👍 or 👎 buttons.
+
+3. **Edit `ai_agent_socialwork_ollama.py` if needed**  
+   - Make sure the `available_models` and embedding model names match what you have downloaded.
+
+4. **Start Ollama and run the app**  
+   ```bash
+   ollama serve
+   python ai_agent_socialwork_ollama.py
+   ```
 
 ## Features in Detail
 
