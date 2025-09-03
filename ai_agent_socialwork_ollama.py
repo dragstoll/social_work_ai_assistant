@@ -12,29 +12,79 @@ import logging
 import sys
 import json
 import csv  # Add CSV module for saving evaluations
+import subprocess
+import gc  # Add garbage collection
+
+# Add timeout configuration
+OLLAMA_TIMEOUT = 30.0  # seconds
 
 
-# Define the available models for Ollama (local)
-available_models = {
-    # "llama3": "llama3",
-    # "mistral": "mistral",
-    "gemma": "gemma3:4b-it-q4_K_M",
-    "qwen": "qwen3:30b-a3b-instruct-2507-q4_K_M",
-    # Add more local Olloma models as needed
-}
+# Define available models for Ollama (local)
+def get_ollama_models():
+    """
+    Returns a list of model names pulled in Ollama (from 'ollama list').
+    """
+    try:
+        result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True)
+        lines = result.stdout.strip().splitlines()
+        models = []
+        for line in lines[1:]:  # Skip header
+            parts = line.split()
+            if parts:
+                # Take the full model name (first column) including any colons or tags
+                model_name = parts[0]
+                models.append(model_name)
+        logging.info(f"Found Ollama models: {models}")
+        return models
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Ollama command failed: {e}")
+        logging.error(f"Command output: {e.stdout if hasattr(e, 'stdout') else 'No output'}")
+        return []
+    except FileNotFoundError:
+        logging.error("Ollama command not found. Is Ollama installed and in PATH?")
+        return []
+    except Exception as e:
+        logging.error(f"Could not get Ollama models: {e}")
+        return []
 
-def select_model(model_name):
-    if model_name in available_models:
-        logging.info(f"Model selected: {model_name}")
-        return available_models[model_name]
-    else:
-        logging.error(f"Invalid model name: {model_name}. Defaulting to qwen.")
-        return available_models["qwen"]
+# Dynamically get available models
+ollama_models = get_ollama_models()
 
-# Example: Set the model to use
-selected_model = select_model("qwen")  # Default model
-# log the model that has been selected
-logging.info(f"Selected model: {selected_model}")
+# Add fallback models if none found
+if not ollama_models:
+    logging.warning("No Ollama models found. Adding common fallback models.")
+    fallback_models = [
+        "llama3.2",
+        "llama3.1", 
+        "llama2",
+        "mistral",
+        "codellama",
+        "phi3",
+        "gemma",
+        "qwen2",
+        "nomic-embed-text"
+    ]
+    ollama_models = fallback_models
+
+embedding_models = ollama_models
+llm_models = ollama_models
+
+# Fallback defaults if none found
+# DEFAULT_LLM_MODEL = llm_models[0] if llm_models else ""
+# DEFAULT_EMBED_MODEL = embedding_models[0] if embedding_models else ""
+
+# Store selected models globally
+selected_llm_model = None
+selected_embed_model = None
+
+# Initialize global variables
+retriever = None
+llm = None
+chain = None
+documents = None
+vectorstore = None
+prompt = None
+embeddings = None
 
 # Configure logging
 logging.basicConfig(
@@ -94,77 +144,89 @@ def ask_question(query):
 
 # Function to handle user queries and save retrieved chunks
 def ask_question_with_chunks(query):
-    logging.info(f"User query: {query}")
-    response = chain.invoke({"input": query})
-    answer = response["answer"]
-    # retrieved_chunks = response.get("retrieved_documents", [])  # Assuming retrieved chunks are returned here
-    # save_chunks_to_file(retrieved_chunks)  # Save only the retrieved chunks
-    logging.info(f"Response: {answer}")
-    logging.getLogger().handlers[0].flush()  # Explicitly flush logs to the file
-    # Save the chunks to a file
-    # query = """{input}"""  # Provide a default query for testing
-    retrieved_documents = retriever.get_relevant_documents(query)
-    save_chunks_to_file(retrieved_documents, "retrieved_chunks.json")
+    global llm, prompt, vectorstore
 
-    return answer
+    if not query.strip():
+        return "Bitte gib eine Frage ein."
 
-# Load the Ollama LLM model immediately
-llm = Ollama(
-    model=selected_model,
-    # You can add additional parameters if needed, e.g. temperature, etc.
-)
-logging.info(f"LLM loaded for RAG: {selected_model}")
+    if llm is None or prompt is None:
+        return "❌ Fehler: Bitte wähle zuerst die Modelle aus und klicke auf 'Modelle übernehmen'."
+
+    if vectorstore is None:
+        return "❌ Fehler: Keine Dokumente geladen. Bitte lade Dokumente aus dem ./documents Ordner oder lade neue Dateien hoch."
+
+    try:
+        logging.info(f"Processing query: {query}")
+
+        # Always create a fresh retriever and chain for each query
+        retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 4})  # Lower k for performance
+        doc_chain = create_stuff_documents_chain(llm, prompt)
+        chain = create_retrieval_chain(retriever, doc_chain)
+
+        # Try to set a timeout if supported by Ollama (some versions support it)
+        try:
+            response = chain.invoke({"input": query})
+        except Exception as e:
+            logging.error(f"Ollama or chain invoke failed: {e}", exc_info=True)
+            return f"❌ Fehler beim Modellaufruf: {e}"
+
+        answer = response.get("answer", "Keine Antwort erhalten.")
+
+        # Save the chunks to a file
+        try:
+            retrieved_documents = retriever.get_relevant_documents(query)
+            save_chunks_to_file(retrieved_documents, "retrieved_chunks.json")
+        except Exception as chunk_error:
+            logging.warning(f"Could not save chunks: {chunk_error}")
+
+        logging.info("Query processed successfully")
+        # Explicitly delete objects to free memory
+        del retriever
+        del doc_chain
+        del chain
+        import gc; gc.collect()
+
+        return answer
+
+    except Exception as e:
+        logging.error(f"Error processing query: {e}", exc_info=True)
+        import gc; gc.collect()
+        return f"❌ Fehler bei der Verarbeitung der Anfrage: {e}"
+
+# # Load the Ollama LLM model immediately
+# llm = Ollama(model=selected_llm_model)
+# logging.info(f"LLM loaded for RAG: {selected_llm_model}")
 
 # Function to update RAG parameters, reload documents, and rerun all necessary functions
 def update_rag_parameters(option):
-    global retriever, llm, chain, documents, vectorstore, prompt
+    global retriever, chain, llm, prompt, vectorstore
+
+    # Check if models are selected
+    if selected_llm_model is None or selected_embed_model is None:
+        logging.error("Models not selected. Cannot update RAG parameters.")
+        return gr.update(), gr.update()
+    
     logging.info(f"Updating RAG parameters based on user selection: {option}")
     try:
-        folder_path = "./documents"
-        logging.info("Reloading documents...")
-        documents = load_all_documents(folder_path)
-        if not documents:
-            logging.error("No documents were loaded. Please check the folder path and document files.")
-            return
-        logging.info(f"{len(documents)} documents reloaded successfully.")
+        if vectorstore is None:
+            logging.error("Vectorstore not initialized. Please select models first.")
+            return gr.update(), gr.update()
 
-        logging.info("Splitting documents into chunks...")
-        documents = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=100,
-        ).split_documents(documents)
-        if not documents:
-            logging.error("No chunks were created. Please check the document processing logic.")
-            return
-        logging.info(f"{len(documents)} chunks created successfully.")
-
-        for doc in documents:
-            source = doc.metadata.get("source", "Unbekanntes Dokument")
-            page = doc.metadata.get("page", "Unbekannte Seite")
-            doc.page_content += f" ({source}, Seite {page})"
-
-        # Use OllamaEmbeddings for local embedding
-        embeddings = OllamaEmbeddings(model="jeffh/intfloat-multilingual-e5-large-instruct:q8_0")  # Use your local embedding model name
-        vectorstore = Chroma.from_documents(documents, embeddings)
-
-        if option == "Antworte möglichst genau":
-            retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
-            logging.info("RAG parameters updated: k=8, temp=0.1. Reloading model...")
-            llm = Ollama(model=selected_model)
-            logging.info(f"LLM reloaded for precise answers: {selected_model}")
-            return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
-        elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
-            retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 20})
-            logging.info("RAG parameters updated: k=20, temp=0.6. Reloading model...")
-            llm = Ollama(model=selected_model)
-            logging.info(f"LLM reloaded for creative answers: {selected_model}")
-            return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
-
+        k = 4 if option == "Antworte möglichst genau" else 10  # Lower k for performance
+        retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": k})
         doc_chain = create_stuff_documents_chain(llm, prompt)
         chain = create_retrieval_chain(retriever, doc_chain)
-        print("bla")
+
+        # Do NOT delete retriever/chain here! They are needed for the next query.
+
+        # Update button colors
+        if option == "Antworte möglichst genau":
+            return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="active-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="inactive-button")
+        elif option == "Antworte mit möglichst vielen Hinweisen und Ideen":
+            return gr.update(value="Antworte möglichst genau", interactive=True, elem_id="inactive-button"), gr.update(value="Antworte mit möglichst vielen Hinweisen und Ideen", interactive=True, elem_id="active-button")
     except Exception as e:
-        logging.error(f"Error while updating RAG parameters, reloading documents, or rerunning functions: {e}")
+        logging.error(f"Error while updating RAG parameters: {e}", exc_info=True)
+        return gr.update(), gr.update()
 
 # Function to log and save evaluation, ensuring it can only be done once
 evaluation_done = False  # Global flag to track if evaluation has been done
@@ -195,6 +257,15 @@ def log_evaluation(evaluation):
     except Exception as e:
         logging.error(f"Failed to save evaluation: {e}")
         return gr.update(interactive=False), gr.update(interactive=False)
+
+# Clear response function
+def clear_response():
+    """Clear the response and clean up resources"""
+    global evaluation_done
+    logging.info("Clearing response and resetting evaluation state")
+    evaluation_done = False
+    import gc; gc.collect()
+    return ""
 
 # Directory to store uploaded files
 uploaded_files_dir = "./uploaded_documents"
@@ -252,24 +323,33 @@ def upload_files(files):
 
 # Function to load all uploaded files for RAG processing
 def load_uploaded_files_for_rag():
-    global vectorstore, retriever, chain
+    global vectorstore, retriever, chain, embeddings, documents
+    
+    # Check if models are selected
+    if selected_llm_model is None or selected_embed_model is None:
+        return "❌ Fehler: Bitte wähle zuerst die Modelle aus und klicke auf 'Modelle übernehmen'."
+    
+    if llm is None or embeddings is None:
+        return "❌ Fehler: Modelle nicht initialisiert. Bitte klicke auf 'Modelle übernehmen'."
+    
     try:
         logging.info("Loading uploaded files for RAG processing...")
-        documents = load_all_documents(uploaded_files_dir)
-        if not documents:
+        uploaded_documents = load_all_documents(uploaded_files_dir)
+        if not uploaded_documents:
             logging.warning("No documents were loaded from the uploaded files directory.")
-            return "No new documents found in the upload directory to process."
+            return "⚠️ Keine neuen Dokumente im Upload-Verzeichnis gefunden."
 
-        logging.info(f"Loaded {len(documents)} documents from {uploaded_files_dir}.")
+        logging.info(f"Loaded {len(uploaded_documents)} documents from {uploaded_files_dir}.")
 
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=100,
         )
-        split_docs = text_splitter.split_documents(documents)
+        split_docs = text_splitter.split_documents(uploaded_documents)
         if not split_docs:
             logging.error("No chunks were created from uploaded files.")
-            return "Failed to split uploaded documents into chunks."
+            return "❌ Fehler: Keine Chunks aus hochgeladenen Dateien erstellt."
+        
         logging.info(f"Split uploaded documents into {len(split_docs)} chunks.")
 
         for doc in split_docs:
@@ -277,66 +357,128 @@ def load_uploaded_files_for_rag():
             page = doc.metadata.get("page", "Unknown Page")
             doc.page_content += f" ({source}, Page {page})"
 
-        # Use OllamaEmbeddings for local embedding
-        embeddings = OllamaEmbeddings(model="jeffh/intfloat-multilingual-e5-large-instruct:q8_0")  # Use your local embedding model name
-        vectorstore = Chroma.from_documents(split_docs, embeddings)
+        # Combine with existing documents if any
+        if documents and len(documents) > 0:
+            all_documents = documents + split_docs
+        else:
+            all_documents = split_docs
+        
+        documents = all_documents
 
-        current_k = retriever.search_kwargs.get("k", 8)
-        retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": current_k})
+        # Recreate vectorstore with all documents
+        import chromadb
+        client = chromadb.PersistentClient(path=".chroma_db")
+        for collection in client.list_collections():
+            client.delete_collection(collection.name)
+            
+        vectorstore = Chroma.from_documents(all_documents, embeddings)
+        retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
 
         doc_chain = create_stuff_documents_chain(llm, prompt)
         chain = create_retrieval_chain(retriever, doc_chain)
 
         logging.info("Vectorstore and RAG chain updated with uploaded files.")
-        return f"Uploaded files ({len(documents)} documents, {len(split_docs)} chunks) successfully processed for RAG."
+        return f"✅ Hochgeladene Dateien erfolgreich verarbeitet:\n📄 {len(uploaded_documents)} Dokumente, {len(split_docs)} Chunks\n🔄 Gesamt: {len(all_documents)} Chunks bereit für Abfragen."
+        
     except Exception as e:
         logging.error(f"Error loading uploaded files for RAG processing: {e}")
-        return f"Error loading uploaded files for RAG processing: {e}"
+        return f"❌ Fehler beim Laden der hochgeladenen Dateien: {e}"
 
 # Gradio app
+def set_models(selected_llm, selected_embed):
+    global selected_llm_model, selected_embed_model, llm, embeddings, vectorstore, retriever, chain, prompt, documents
+    
+    if not selected_llm or not selected_embed:
+        return "❌ Fehler: Bitte wähle beide Modelle aus."
+    
+    selected_llm_model = selected_llm
+    selected_embed_model = selected_embed
+    
+    try:
+        logging.info(f"Loading models - LLM: {selected_llm_model}, Embedding: {selected_embed_model}")
+        
+        # Initialize models without timeout to avoid hanging
+        llm = Ollama(model=selected_llm_model)
+        embeddings = OllamaEmbeddings(model=selected_embed_model)
+        
+        # Initialize prompt template
+        template = """INSTRUKTIONEN: Du musst nur auf Deutsch antworten.
+        Du bist ein hilfreicher KI-Agent. Ich bin ein Sozialarbeiter im Einarbeitungsprozess und arbeite bei der Sozialhilfe in der Schweiz. 
+        Bitte Suche in den dir zu zurverfügunggestellen Dokumenten und gibt mir möglichst genaue und hilfreiche Antworten auf meine Frage. 
+        Wenn es keine Hinweise in den Dokumenten gibt, sage mir, dass ich die Frage nicht beantworten kann.
+        Gib mir immer eine Quellenangabe deiner Antwort (zum Beispiel "Dokument 1, , Seite 3")
+        FRAGE: {input} 
+        KONTEXT: {context} 
+        ANTWORT:"""
+        
+        prompt = ChatPromptTemplate.from_template(template)
+        
+        # Always try to create vectorstore if documents exist
+        if documents and len(documents) > 0:
+            try:
+                # Clear existing vectorstore
+                import chromadb
+                client = chromadb.PersistentClient(path=".chroma_db")
+                try:
+                    for collection in client.list_collections():
+                        client.delete_collection(collection.name)
+                except Exception as cleanup_error:
+                    logging.warning(f"Could not clean up old collections: {cleanup_error}")
+                
+                vectorstore = Chroma.from_documents(documents, embeddings)
+                
+                # Create initial retriever and chain
+                retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
+                doc_chain = create_stuff_documents_chain(llm, prompt)
+                chain = create_retrieval_chain(retriever, doc_chain)
+                
+                logging.info("RAG system initialized successfully with existing documents.")
+                return f"✅ Modelle erfolgreich geladen - LLM: {selected_llm_model}, Embedding: {selected_embed_model}\n📄 {len(documents)} Dokumente bereit für Abfragen."
+            except Exception as e:
+                logging.error(f"Error creating vectorstore: {e}")
+                return f"⚠️ Modelle geladen, aber Fehler beim Erstellen der Vectorstore: {e}\nBitte versuche Dokumente erneut zu laden."
+        else:
+            logging.info("Models loaded, but no documents available yet.")
+            # Only reset these if no documents
+            chain = None
+            retriever = None
+            vectorstore = None
+            return f"✅ Modelle erfolgreich geladen - LLM: {selected_llm_model}, Embedding: {selected_embed_model}\n⚠️ Keine Dokumente gefunden. Bitte lade Dokumente hoch oder prüfe den ./documents Ordner."
+        
+    except Exception as e:
+        logging.error(f"Error loading models: {e}")
+        return f"❌ Fehler beim Laden der Modelle: {e}\nBitte prüfe die Modellnamen und ob sie mit Ollama gepullt wurden."
+
 if __name__ == "__main__":
+    # Load documents at startup
     folder_path = "./documents"
-    document = load_all_documents(folder_path)
-    if not document:
-        logging.error("No documents were loaded. Please check the folder path and document files.")
+    startup_documents = load_all_documents(folder_path)
+    if not startup_documents:
+        logging.warning("No documents were loaded from ./documents folder at startup.")
+        documents = []
     else:
-        logging.info(f"{len(document)} documents loaded successfully.")
+        logging.info(f"{len(startup_documents)} documents loaded successfully from ./documents folder.")
 
         try:
             documents = RecursiveCharacterTextSplitter(
                 chunk_size=1000,
                 chunk_overlap=100,
-            ).split_documents(document)
+            ).split_documents(startup_documents)
 
             if not documents:
-                logging.error("No chunks were created. Please check the document processing logic.")
+                logging.error("No chunks were created from startup documents.")
+                documents = []
             else:
-                logging.info(f"{len(documents)} chunks created successfully.")
+                logging.info(f"{len(documents)} chunks created successfully from startup documents.")
 
                 for doc in documents:
                     source = doc.metadata.get("source", "Unbekanntes Dokument")
                     page = doc.metadata.get("page", "Unbekannte Seite")
                     doc.page_content += f" ({source}, Seite {page})"
 
-                
-
         except Exception as e:
             logging.error(f"Error during document splitting: {e}")
-
-    # Use OllamaEmbeddings for local embedding
-    embeddings = OllamaEmbeddings(model="jeffh/intfloat-multilingual-e5-large-instruct:q8_0")  # Use your local embedding model name
-
-    vectorstore = Chroma.from_documents(documents, embeddings)
-    retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
-
-    # Update retriever parameters based on user choice
-    def update_retriever_parameters(choice, input):
-        if choice == "Antworte möglichst genau":
-            retriever.search_kwargs["k"] = 8
-            logging.info("Retriever parameter updated: k=8 for precise answers")
-        elif choice == "Antworte mit möglichst vielen Hinweisen und Ideen":
-            retriever.search_kwargs["k"] = 20
-            logging.info("Retriever parameter updated: k=20 for more creative answers")
+            documents = []
 
     template = """INSTRUKTIONEN: Du musst nur auf Deutsch antworten.
     Du bist ein hilfreicher KI-Agent. Ich bin ein Sozialarbeiter im Einarbeitungsprozess und arbeite bei der Sozialhilfe in der Schweiz. 
@@ -347,21 +489,82 @@ if __name__ == "__main__":
     KONTEXT: {context} 
     ANTWORT:"""
 
-    prompt = ChatPromptTemplate.from_template(template)
-    doc_chain = create_stuff_documents_chain(llm, prompt)
-    chain = create_retrieval_chain(retriever, doc_chain)
-    
-    
+    # Do NOT instantiate llm, embeddings, doc_chain, chain here
+    # Wait for user to click "Modelle übernehmen" in Gradio UI
+
     with gr.Blocks(css=".gradio-container { font-size: 12px; }") as app:
         gr.Markdown("# Suchassistent für Sozialarbeitende")
+
+        # Model selection UI (dynamic from ollama list)
+        gr.Markdown("### 1️⃣ Wähle die Modelle für LLM und Embedding:")
+        
+        # Add status message about available models
+        if not get_ollama_models():
+            gr.Markdown("⚠️ **Hinweis**: Keine Ollama-Modelle automatisch erkannt. Fallback-Modelle werden angezeigt. Stelle sicher, dass Ollama läuft und Modelle installiert sind.")
+        
+        with gr.Row():
+            llm_dropdown = gr.Dropdown(
+                label="LLM Modell", 
+                choices=llm_models, 
+                value=llm_models[0] if llm_models else None,
+                allow_custom_value=True,
+                info="Wähle ein Modell oder gib einen eigenen Namen ein"
+            )
+            embed_dropdown = gr.Dropdown(
+                label="Embedding Modell", 
+                choices=embedding_models, 
+                value=embedding_models[0] if embedding_models else None,
+                allow_custom_value=True,
+                info="Wähle ein Modell oder gib einen eigenen Namen ein"
+            )
+            set_model_button = gr.Button("Modelle übernehmen", variant="primary")
+        
+        model_status = gr.Textbox(
+            label="Status", 
+            value="⚠️ Bitte wähle Modelle aus und klicke auf 'Modelle übernehmen'", 
+            interactive=False
+        )
+
+        # Add button to refresh model list
+        with gr.Row():
+            refresh_models_button = gr.Button("🔄 Modelle neu laden", size="sm")
+        
+        def refresh_models():
+            global ollama_models, llm_models, embedding_models
+            ollama_models = get_ollama_models()
+            if not ollama_models:
+                ollama_models = [
+                    "llama3.2", "llama3.1", "llama2", "mistral", "codellama", 
+                    "phi3", "gemma", "qwen2", "nomic-embed-text"
+                ]
+            llm_models = ollama_models
+            embedding_models = ollama_models
+            logging.info(f"Refreshed models: {ollama_models}")
+            return (
+                gr.update(choices=llm_models, value=llm_models[0] if llm_models else None),
+                gr.update(choices=embedding_models, value=embedding_models[0] if embedding_models else None),
+                f"🔄 Modelle neu geladen: {len(ollama_models)} gefunden"
+            )
+        
+        refresh_models_button.click(
+            refresh_models,
+            inputs=[],
+            outputs=[llm_dropdown, embed_dropdown, model_status]
+        )
+
+        set_model_button.click(
+            set_models,
+            inputs=[llm_dropdown, embed_dropdown],
+            outputs=[model_status],
+        )
+
+        gr.Markdown("### 2️⃣ Stelle deine Frage:")
         query_input = gr.Textbox(label="Formuliere deine Frage", placeholder="Was möchtest du wissen?", lines=2)
 
-        response_output = gr.Textbox(label="Antwort", interactive=False)
-
-       
+        response_output = gr.Textbox(label="Antwort", interactive=False, lines=10)
 
         # Add buttons for RAG parameter selection
-        gr.Markdown("### Wähle eine Antwortstrategie:")
+        gr.Markdown("### 3️⃣ Wähle eine Antwortstrategie:")
         with gr.Row():
             precise_button = gr.Button("Antworte möglichst genau", elem_id="active-button")
             creative_button = gr.Button("Antworte mit möglichst vielen Hinweisen und Ideen", elem_id="inactive-button")
@@ -390,8 +593,8 @@ if __name__ == "__main__":
             outputs=[response_output]
         )
         clear_button.click(
-            lambda: logging.info("Response cleared") or logging.getLogger().handlers[0].flush() or "", 
-            inputs=[], 
+            clear_response,
+            inputs=[],
             outputs=[response_output]
         )
 
@@ -426,7 +629,7 @@ if __name__ == "__main__":
         gr.Markdown("Beispiel: \"Was muss ich beachten, wenn ich Sozialhilfe beantrage?\"")
         gr.Markdown("Beispiel: \"Wie lange dauert es, bis ich eine Antwort auf mein Gesuch erhalte?\"")
         
-         # File upload and listing section
+        # File upload and listing section
         gr.Markdown("### Dateien hochladen und anzeigen:")
         with gr.Row():
             file_upload = gr.File(label="Lade PDF-Dateien hoch", file_types=[".pdf"], file_count="multiple")
@@ -487,3 +690,6 @@ if __name__ == "__main__":
         """
     # Launch the app with explicit host, port, and public sharing enabled
     app.launch(server_name="0.0.0.0", server_port=7860, share=False)
+       
+
+
