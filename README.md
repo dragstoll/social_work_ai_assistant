@@ -93,6 +93,7 @@ ollama pull jeffh/intfloat-multilingual-e5-large-instruct:q8_0
 > See [Ollama Model Library](https://ollama.com/library) for more options.
 
 ### 4. Prepare document folders
+- **Important:** Before running the app, save your PDF documents (e.g., `sozialhilfe-handbuch.pdf` from this repository) in the `./documents` folder.  
 - Place initial documents to be processed in the `./documents` folder.
 - Create an empty `./uploaded_documents` folder for user uploads.
 
